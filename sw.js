@@ -1,5 +1,5 @@
 // 版本号改了才会触发更新，每次发新版把这里 +1
-const CACHE = 'sw2602-v2';
+const CACHE = 'sw2602-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

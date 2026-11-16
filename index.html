@@ -93,8 +93,12 @@ input{font-family:inherit}
 .opt.on{border-color:var(--primary);background:rgba(37,99,235,.08)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
 
-#toast{position:fixed;left:50%;bottom:calc(var(--tabh) + env(safe-area-inset-bottom) + 16px);transform:translateX(-50%);background:#0f172a;color:#fff;padding:11px 15px;border-radius:13px;font-size:14px;display:flex;gap:14px;align-items:center;z-index:55;box-shadow:0 8px 24px rgba(0,0,0,.28);max-width:92vw}
-#toast button{background:none;border:0;color:#7dd3fc;font-size:14px;font-weight:700;padding:0}
+#toast{position:fixed;left:0;right:0;bottom:calc(var(--tabh) + env(safe-area-inset-bottom) + 14px);z-index:55;display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 12px;pointer-events:none}
+#toast.hidden{display:none}
+#toast.above-save{bottom:calc(var(--tabh) + env(safe-area-inset-bottom) + 100px)}
+.toast-row{pointer-events:auto;background:#0f172a;color:#fff;padding:11px 15px;border-radius:13px;font-size:14px;display:flex;gap:14px;align-items:center;box-shadow:0 8px 24px rgba(0,0,0,.28);max-width:100%}
+.toast-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:64vw}
+.toast-row button{background:none;border:0;color:#7dd3fc;font-size:14px;font-weight:700;padding:0;flex:none}
 
 .mcard{background:var(--card);border-radius:var(--radius);margin:12px;padding:15px 16px;box-shadow:0 1px 2px rgba(15,23,42,.05)}
 .mcard:active{background:var(--line)}
@@ -195,7 +199,7 @@ var ROSTER = [
 var STK={present:'在岗',personal:'事假',sick:'病假',absent:'缺席'};
 var MSTK={done:'已交',not:'未交',exempt:'免交'};
 var KEY='sw2602.v2', OLDLABEL='刘宇轩';
-var APPVER='v0.5';
+var APPVER='v0.6';
 var main=document.getElementById('main');
 var tabsEl=document.getElementById('tabs');
 var sheetEl=document.getElementById('sheet');
@@ -225,12 +229,38 @@ function fmtNow(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth(
 function fmtDay(ts){ var d=new Date(ts); return (d.getMonth()+1)+'月'+d.getDate()+'日'; }
 function counts(rec){ var c={present:0,personal:0,sick:0,absent:0,unmarked:0}; S.students.forEach(function(s){ var r=rec[s.id]; if(!r)c.unmarked++; else c[r.st]++; }); return c; }
 function byId(id){ for(var i=0;i<S.students.length;i++) if(S.students[i].id===id) return S.students[i]; return null; }
-function toast(msg,undo){
-  if(sheetEl.classList.contains('on')) sheetEl.classList.remove('on');
-  toastEl.innerHTML='<span>'+esc(msg)+'</span>'+(undo?'<button id="undoBtn">撤销</button>':'');
+/* 浮窗：最多 3 条，带撤销的 3 分钟后自动消失；同一个人重复操作只更新那一条 */
+var TOAST_UNDO_MS=180000, TOAST_MS=3200, toasts=[];
+function toast(msg,undo,key){
+  key=key||('auto:'+uid());
+  var t=null;
+  for(var i=0;i<toasts.length;i++) if(toasts[i].key===key) t=toasts[i];
+  if(!t){
+    t={key:key};
+    toasts.push(t);
+    while(toasts.length>3){ var gone=toasts.shift(); clearTimeout(gone.timer); }
+  }
+  t.msg=msg; t.undo=undo||null;
+  clearTimeout(t.timer);
+  t.timer=setTimeout(function(){ dropToast(key); }, undo?TOAST_UNDO_MS:TOAST_MS);
+  paintToasts();
+}
+function dropToast(key){
+  toasts=toasts.filter(function(x){return x.key!==key});
+  paintToasts();
+}
+function paintToasts(){
+  if(!toasts.length){ toastEl.classList.add('hidden'); toastEl.innerHTML=''; return; }
   toastEl.classList.remove('hidden');
-  if(undo) document.getElementById('undoBtn').onclick=function(){ undo(); toastEl.classList.add('hidden'); };
-  clearTimeout(toastTimer); toastTimer=setTimeout(function(){ toastEl.classList.add('hidden'); },2800);
+  toastEl.classList.toggle('above-save', view==='roll' && !!S.draft);
+  toastEl.innerHTML=toasts.map(function(t){
+    return '<div class="toast-row"><span>'+esc(t.msg)+'</span>'+
+      (t.undo?'<button data-toastundo="'+esc(t.key)+'">撤销</button>':'')+'</div>';
+  }).join('');
+}
+function clearToasts(prefix){
+  toasts=prefix?toasts.filter(function(t){return t.key.indexOf(prefix)!==0}):[];
+  paintToasts();
 }
 function copyText(t){
   if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -386,7 +416,7 @@ function setStatus(sid,st,note){
   d.rec[sid]={st:st,note:note||''};
   save(); render();
   if(st!=='present') log('点名','标记 '+byId(sid).name+' → '+STK[st]+(note?'（'+note+'）':''));
-  toast(byId(sid).name+' · '+STK[st],function(){ if(prev)d.rec[sid]=prev; else delete d.rec[sid]; save(); render(); });
+  toast(byId(sid).name+' · '+STK[st],function(){ if(prev)d.rec[sid]=prev; else delete d.rec[sid]; save(); render(); },'roll:'+sid);
   setTimeout(scrollToNext,60);
 }
 function askSave(){
@@ -407,6 +437,7 @@ function finishSave(){
   S.sessions.push(sess); S.draft=null; save();
   var c=counts(sess.rec);
   log('点名','保存 '+sess.title+' '+sess.date+' 在岗'+c.present+' 事假'+c.personal+' 病假'+c.sick+' 缺席'+c.absent);
+  clearToasts('roll:');
   viewSession=sess; view='result'; render(); main.scrollTop=0;
 }
 
@@ -471,7 +502,7 @@ function matHTML(){
         '<span>免交 <b>'+st.exempt+'</b></span><span>未交 <b>'+st.left+'</b></span>'+
         (notesCount(m)?'<span>备注 <b>'+notesCount(m)+'</b></span>':'')+'</div></div>';
   }).join('');
-  return '<div class="sect"><span>共 '+S.materials.length+' 项</span><span>点开一项开始清点</span></div>'+cards+
+  return '<div class="sect"><span>共 '+S.materials.length+' 项</span><span>点开清点 · 长按改名/删除</span></div>'+cards+
     '<div style="padding:12px 14px 4px"><button class="ghost" data-newmat>＋ 新建材料</button></div>';
 }
 function curMat(){ return S.materials.filter(function(x){return x.id===openMat})[0]; }
@@ -559,6 +590,7 @@ function matDetailHTML(){
       '<div class="pbar"><i style="width:'+Math.round(st.done/Math.max(1,S.students.length-st.exempt)*100)+'%"></i></div>'+
       '<div class="searchwrap"><input class="search" id="mSearch" value="'+esc(matQ)+'" placeholder="搜姓名 / 学号 / 备注关键词（如 快递、代交）"><button class="sclr'+(matQ.trim()?' on':'')+'" id="mClear">✕</button></div>'+
       '<div class="filterbar" id="mFilters">'+filterChips(m)+'</div>'+
+      '<div style="font-size:11px;color:var(--muted);margin:6px 2px 0">长按一个同学：改状态 / 写备注 / 复制</div>'+
     '</div>'+
     '<div id="mList">'+matRowsHTML(m)+'</div>';
 }
@@ -583,7 +615,7 @@ function mset(sid,st,note){
   toast(byId(sid).name+' · '+MSTK[st==='not'?'not':st],function(){
     if(prev) m.marks[sid]=prev; else delete m.marks[sid];
     save(); render();
-  });
+  },'mat:'+(openMat||'')+':'+sid);
 }
 function copyLeft(){
   var m=curMat(); if(!m) return;
@@ -648,6 +680,73 @@ function delSession(id){
     S.sessions=S.sessions.filter(function(x){return x.id!==id});
     save(); log('删除','点名 '+(sess.title||'')+' '+(sess.date||'')); view='hist'; render(); toast('已删除这次点名');
   });
+}
+/* 长按材料里的同学 */
+function sheetMatStudent(sid){
+  var m=curMat(); if(!m) return;
+  var s=byId(sid); if(!s) return;
+  var r=m.marks[sid], cur=r?r.st:'not';
+  var curTxt=(cur==='not'?'未交':MSTK[cur]);
+  showSheet('<div class="sheet-h">'+esc(s.name)+'</div>'+
+    '<div class="sheet-p">'+(m.name||'材料')+' · 现在：'+curTxt+'</div>'+
+    '<button class="primary" data-ms="done">设为已交</button>'+
+    '<button class="ghost" style="margin-top:10px" data-ms="not">设为未交</button>'+
+    '<button class="ghost" style="margin-top:10px" data-ms="exempt">设为免交</button>'+
+    '<button class="ghost" style="margin-top:10px" data-ms="note">写备注</button>'+
+    '<button class="ghost" style="margin-top:10px" data-ms="copy">复制「'+esc(s.name)+' · '+curTxt+'」</button>'+
+    '<button class="ghost" style="margin-top:10px" data-close>取消</button>',
+    function(box){
+      box.querySelectorAll('[data-ms]').forEach(function(b){
+        b.onclick=function(){
+          var a=b.dataset.ms;
+          if(a==='note'){ closeSheet(); sheetNote(sid); return; }
+          if(a==='copy'){ copyText(s.name+' · '+curTxt); closeSheet(); return; }
+          closeSheet(); mset(sid,a);
+        };
+      });
+    });
+}
+/* 长按材料卡片 */
+function sheetMatActions(id){
+  var m=S.materials.filter(function(x){return x.id===id})[0]; if(!m) return;
+  var st=matStats(m);
+  showSheet('<div class="sheet-h">'+esc(m.name)+'</div>'+
+    '<div class="sheet-p">已交 '+st.done+' / '+S.students.length+'　未交 '+st.left+'　免交 '+st.exempt+
+      (m.due?'　截止 '+esc(m.due):'')+'</div>'+
+    '<button class="primary" data-ma="open">打开清点</button>'+
+    '<button class="ghost" style="margin-top:10px" data-ma="rename">改名字</button>'+
+    '<button class="ghost" style="margin-top:10px" data-ma="exp">导出表格 / 存为 PDF</button>'+
+    '<button class="ghost" style="margin-top:10px;color:var(--absent)" data-ma="del">删除这项材料</button>'+
+    '<button class="ghost" style="margin-top:10px" data-close>取消</button>',
+    function(box){
+      box.querySelectorAll('[data-ma]').forEach(function(b){
+        b.onclick=function(){
+          var a=b.dataset.ma;
+          if(a==='open'){ closeSheet(); openMat=id; matQ=''; matFilter='all'; matKw=''; view='matdetail'; render(); main.scrollTop=0; }
+          else if(a==='rename'){ closeSheet(); sheetRenameMat(id); }
+          else if(a==='exp'){ closeSheet(); exportMaterial(m); }
+          else if(a==='del'){ closeSheet(); sheetConfirm('删除这项材料？','「'+esc(m.name)+'」的提交记录会一起删掉，删了找不回。','删除',function(){
+            S.materials=S.materials.filter(function(x){return x.id!==id}); save(); log('删除','材料 '+m.name); view='mat'; openMat=null; render(); toast('已删除这项材料');
+          }); }
+        };
+      });
+    });
+}
+function sheetRenameMat(id){
+  var m=S.materials.filter(function(x){return x.id===id})[0]; if(!m) return;
+  showSheet('<div class="sheet-h">改名字</div>'+
+    '<input id="rnIn" class="inp" value="'+esc(m.name)+'">'+
+    '<input type="date" id="rnDue" class="inp" style="margin-top:10px" value="'+esc(m.due||'')+'">'+
+    '<div class="row2"><button class="ghost" data-close>取消</button><button class="primary" id="okRn">保存</button></div>',
+    function(box){
+      box.querySelector('[data-close]').onclick=closeSheet;
+      box.querySelector('#okRn').onclick=function(){
+        var n=box.querySelector('#rnIn').value.trim();
+        if(!n){ toast('名字不能空'); return; }
+        m.name=n; m.due=box.querySelector('#rnDue').value||'';
+        save(); closeSheet(); render(); log('材料','改名 → '+n); toast('已改名');
+      };
+    });
 }
 
 /* ---------- 设置 ---------- */
@@ -996,7 +1095,6 @@ function exportSummary(){
 function showSheet(html,mount){
   sheetEl.innerHTML='<div class="mask"></div><div class="sheet">'+html+'</div>';
   sheetEl.classList.remove('hidden');
-  toastEl.classList.add('hidden');
   requestAnimationFrame(function(){ sheetEl.classList.add('on'); });
   sheetEl.querySelector('.mask').onclick=closeSheet;
   if(mount) mount(sheetEl.querySelector('.sheet'));
@@ -1255,6 +1353,14 @@ function addStudent(){
 document.addEventListener('click',function(e){
   var el=e.target;
 
+  var ub=el.closest('[data-toastundo]');
+  if(ub){
+    var k=ub.dataset.toastundo, t=null;
+    for(var i=0;i<toasts.length;i++) if(toasts[i].key===k) t=toasts[i];
+    if(t&&t.undo){ var fn=t.undo; dropToast(k); fn(); } else dropToast(k);
+    return;
+  }
+
   var tb=el.closest('[data-tab]');
   if(tb){ view=tb.dataset.tab; openMat=null; render(); main.scrollTop=0; return; }
 
@@ -1280,11 +1386,14 @@ document.addEventListener('click',function(e){
   var sv=el.closest('[data-sv]');
   if(sv){ closeSheet(); finishSave(); return; }
   var back=el.closest('[data-back]');
-  if(back){ if(view==='matdetail'){view='mat';openMat=null;matQ='';matFilter='all';matKw='';} else if(view==='students'||view==='logs'){view='settings';} render(); return; }
+  if(back){ if(view==='matdetail'){view='mat';openMat=null;matQ='';matFilter='all';matKw='';clearToasts('mat:');} else if(view==='students'||view==='logs'){view='settings';} render(); return; }
   var newmat=el.closest('[data-newmat]');
   if(newmat){ sheetNewMat(); return; }
   var mat=el.closest('[data-mat]');
-  if(mat){ openMat=mat.dataset.mat; matQ=''; matFilter='all'; matKw=''; view='matdetail'; render(); main.scrollTop=0; return; }
+  if(mat){
+    if(lpFired){ lpFired=false; return; }
+    openMat=mat.dataset.mat; matQ=''; matFilter='all'; matKw=''; view='matdetail'; render(); main.scrollTop=0; return;
+  }
   if(el.closest('#mClear')){
     matQ=''; matFilter='all'; matKw='';
     var inp=document.getElementById('mSearch'); if(inp) inp.value='';
@@ -1357,18 +1466,25 @@ document.addEventListener('click',function(e){
   if(el.closest('#addStu')){ addStudent(); return; }
   if(el.closest('[data-close]')){ closeSheet(); return; }
 });
-/* 长按记录行 = 打开这条记录的操作菜单 */
+/* 长按：记录行 / 材料里的同学 / 材料卡片 */
 var lpTimer=null, lpFired=false;
 document.addEventListener('touchstart',function(e){
-  var row=e.target.closest('.hrow');
-  if(!row) return;
+  var hrow=e.target.closest('.hrow');
+  var mrow=e.target.closest('.mrow');
+  var mcard=e.target.closest('[data-mat]');
+  if(!hrow&&!mrow&&!mcard) return;
   lpFired=false;
   clearTimeout(lpTimer);
-  lpTimer=setTimeout(function(){ lpFired=true; sheetSessionActions(row.dataset.sess); },520);
+  lpTimer=setTimeout(function(){
+    lpFired=true;
+    if(hrow) sheetSessionActions(hrow.dataset.sess);
+    else if(mrow) sheetMatStudent(mrow.dataset.sid);
+    else if(mcard) sheetMatActions(mcard.dataset.mat);
+  },520);
 },{passive:true});
 document.addEventListener('touchmove',function(){ clearTimeout(lpTimer); },{passive:true});
 document.addEventListener('touchend',function(){ clearTimeout(lpTimer); },{passive:true});
-document.addEventListener('contextmenu',function(e){ if(e.target.closest('.hrow')) e.preventDefault(); });
+document.addEventListener('contextmenu',function(e){ if(e.target.closest('.hrow,.mrow,[data-mat]')) e.preventDefault(); });
 
 document.addEventListener('input',function(e){
   if(e.target.id==='sTitle'&&S.draft){ S.draft.title=e.target.value||'点名'; save(); return; }
